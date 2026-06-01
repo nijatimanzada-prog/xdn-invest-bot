@@ -1,36 +1,74 @@
 import os
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
+import time
+import requests
 from openai import OpenAI
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
+BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text or ""
+def send_message(chat_id, text):
+    requests.post(
+        f"{BASE_URL}/sendMessage",
+        json={
+            "chat_id": chat_id,
+            "text": text[:4000]
+        },
+        timeout=20
+    )
 
+def ask_gpt(text):
     response = client.chat.completions.create(
         model="gpt-4.1",
         messages=[
             {
                 "role": "system",
-                "content": "You are Nijat's investment analyst bot. Give practical analysis of stocks, IPOs, earnings, market news, catalysts, entry price, exit target, risk and whether to buy now or wait. Answer in Russian unless user asks otherwise."
+                "content": "Ты инвестиционный аналитик Nijat. Анализируй акции, IPO, earnings, новости, катализаторы, вход, цель, стоп и стоит ли покупать сейчас. Отвечай по-русски, практично и конкретно."
             },
             {
                 "role": "user",
-                "content": user_text
+                "content": text
             }
-        ],
+        ]
     )
-
-    await update.message.reply_text(response.choices[0].message.content)
+    return response.choices[0].message.content
 
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.run_polling()
+    offset = None
+    print("Bot started")
+
+    while True:
+        try:
+            params = {"timeout": 30}
+            if offset is not None:
+                params["offset"] = offset
+
+            response = requests.get(
+                f"{BASE_URL}/getUpdates",
+                params=params,
+                timeout=40
+            )
+
+            data = response.json()
+
+            for update in data.get("result", []):
+                offset = update["update_id"] + 1
+
+                message = update.get("message", {})
+                chat = message.get("chat", {})
+                chat_id = chat.get("id")
+                text = message.get("text")
+
+                if chat_id and text:
+                    send_message(chat_id, "Принял. Анализирую...")
+                    answer = ask_gpt(text)
+                    send_message(chat_id, answer)
+
+        except Exception as e:
+            print("ERROR:", e)
+            time.sleep(5)
 
 if __name__ == "__main__":
     main()
